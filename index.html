@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>WAC Inventaire</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="WAC Inv">
+<meta name="theme-color" content="#0a0a0a">
+<style>
+  :root{
+    --bg:#0a0a0a; --panel:#161616; --panel2:#1f1f1f; --red:#e31e24;
+    --text:#ffffff; --muted:#9a9a9a; --border:#2b2b2b; --green:#2fae55;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom);
+    overflow-x:hidden;
+  }
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px; border-bottom:3px solid var(--red); position:sticky; top:0;
+    background:var(--bg); z-index:10;
+  }
+  header .brand{font-weight:800; letter-spacing:2px; font-size:20px;}
+  header .brand span{color:var(--red);}
+  header button.back{
+    background:none; border:1px solid var(--border); color:var(--text);
+    border-radius:10px; padding:8px 12px; font-size:15px;
+  }
+  main{padding:16px; max-width:640px; margin:0 auto;}
+  .hidden{display:none !important;}
+  h2.title{font-size:17px; color:var(--muted); font-weight:600; margin:4px 0 14px;}
+  .grid{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    padding:16px 12px; text-align:center; font-weight:700; font-size:15px;
+    display:flex; align-items:center; justify-content:center; min-height:64px;
+  }
+  .card:active{background:var(--panel2);}
+  input[type=text], input[type=number], select{
+    width:100%; background:var(--panel); border:1px solid var(--border); color:var(--text);
+    padding:12px 14px; border-radius:12px; font-size:16px; margin-bottom:12px;
+  }
+  label{font-size:13px; color:var(--muted); display:block; margin-bottom:6px;}
+  .list-item{
+    background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    padding:14px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;
+  }
+  .list-item .name{font-weight:700;}
+  .list-item .meta{color:var(--muted); font-size:13px; margin-top:2px;}
+  .btn{
+    display:block; width:100%; text-align:center; padding:14px; border-radius:12px;
+    border:none; font-weight:800; font-size:16px; cursor:pointer;
+  }
+  .btn-primary{background:var(--red); color:#fff;}
+  .btn-outline{background:transparent; border:1px solid var(--border); color:var(--text);}
+  .btn-add{background:var(--panel2); border:1px dashed var(--red); color:var(--red); margin-bottom:14px;}
+  .size-row{
+    display:flex; align-items:center; justify-content:space-between;
+    background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    padding:12px 14px; margin-bottom:10px;
+  }
+  .size-row .size-label{font-weight:800; font-size:16px; width:70px;}
+  .stepper{display:flex; align-items:center; gap:10px;}
+  .stepper button{
+    width:40px; height:40px; border-radius:10px; border:1px solid var(--border);
+    background:var(--panel2); color:var(--text); font-size:20px; font-weight:800;
+  }
+  .stepper input{
+    width:54px; text-align:center; background:none; border:none; color:var(--text);
+    font-size:18px; font-weight:800; margin:0; padding:0;
+  }
+  .chips{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px;}
+  .chip{
+    padding:8px 12px; border-radius:20px; border:1px solid var(--border); background:var(--panel);
+    font-size:14px; font-weight:700; color:var(--muted);
+  }
+  .chip.active{background:var(--red); color:#fff; border-color:var(--red);}
+  .toast{
+    position:fixed; left:16px; right:16px; bottom:24px; background:var(--green);
+    color:#fff; padding:14px; border-radius:12px; text-align:center; font-weight:700;
+    box-shadow:0 6px 20px rgba(0,0,0,.4); z-index:50;
+  }
+  .error-banner{
+    background:#3a1414; border:1px solid var(--red); color:#ffb3b3; padding:12px; border-radius:12px;
+    margin-bottom:14px; font-size:14px;
+  }
+  .search-wrap{position:sticky; top:62px; background:var(--bg); padding-bottom:8px; z-index:5;}
+  .empty{color:var(--muted); text-align:center; padding:40px 0;}
+</style>
+</head>
+<body>
+
+<header>
+  <button id="backBtn" class="back hidden">&larr; Retour</button>
+  <div class="brand">W<span>A</span>C <span style="color:var(--muted); font-weight:500; font-size:13px;">Inventaire</span></div>
+  <div style="width:30px;"></div>
+</header>
+
+<main id="app"></main>
+
+<script>
+/* ======= CONFIGURATION ======= */
+/* URL de l'app web Google Apps Script. */
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzVQw89ezLqCY4iH2CKYoQzuTyY8Je1-5sKg5crcnlfu8FftgACIeK66zUrIoBs-bDLNA/exec";
+
+/* Categories du catalogue WAC et tailles par defaut */
+const CATEGORIES = [
+  { id: "tshirts", label: "T-Shirts", sizes: ["XS","S","M","L","XL","XXL"] },
+  { id: "polos", label: "Polos", sizes: ["XS","S","M","L","XL","XXL"] },
+  { id: "hoodies", label: "Hoodies", sizes: ["XS","S","M","L","XL","XXL"] },
+  { id: "shirts", label: "Shirts", sizes: ["XS","S","M","L","XL","XXL"] },
+  { id: "jackets", label: "Jackets & Pants", sizes: ["XS","S","M","L","XL","XXL"] },
+  { id: "shorts", label: "Shorts & Summer", sizes: ["XS","S","M","L","XL","XXL"] },
+  { id: "caps", label: "Caps", sizes: ["Taille unique"] },
+  { id: "scarves", label: "Scarves & Flags", sizes: ["Taille unique"] },
+  { id: "shoes", label: "Shoes & Slides", sizes: ["39","40","41","42","43","44","45","46"] },
+  { id: "autre", label: "Autre", sizes: [] },
+];
+
+/* ======= ETAT ======= */
+let state = { products: [], inventory: {}, view: "home", category: null, product: null };
+
+function catLabel(id){ const c = CATEGORIES.find(c=>c.id===id); return c ? c.label : id; }
+function catSizes(id){ const c = CATEGORIES.find(c=>c.id===id); return c ? c.sizes : []; }
+function invKey(nom, taille){ return nom + "||" + taille; }
+
+/* ======= API ======= */
+async function apiGet(action){
+  const res = await fetch(`${APPS_SCRIPT_URL}?action=${action}`);
+  if(!res.ok) throw new Error("Reponse serveur invalide");
+  return res.json();
+}
+async function apiPost(payload){
+  const res = await fetch(APPS_SCRIPT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" }, // evite le preflight CORS
+    body: JSON.stringify(payload),
+  });
+  if(!res.ok) throw new Error("Reponse serveur invalide");
+  return res.json();
+}
+
+async function loadAll(){
+  const [products, inventory] = await Promise.all([apiGet("products"), apiGet("inventory")]);
+  state.products = products;
+  state.inventory = {};
+  inventory.forEach(row => { state.inventory[invKey(row.produit, row.taille)] = row; });
+}
+
+/* ======= ROUTER / RENDER ======= */
+const app = document.getElementById("app");
+const backBtn = document.getElementById("backBtn");
+
+function go(view, extra){
+  state.view = view;
+  Object.assign(state, extra || {});
+  render();
+}
+backBtn.addEventListener("click", () => {
+  if(state.view === "product") go("category-list", { product: null });
+  else if(state.view === "newProduct") go(state.category ? "category-list" : "home");
+  else go("home", { category: null });
+});
+
+function configured(){ return APPS_SCRIPT_URL && !APPS_SCRIPT_URL.includes("COLLE_TON_URL"); }
+
+function showToast(msg){
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 1800);
+}
+
+function render(){
+  backBtn.classList.toggle("hidden", state.view === "home");
+
+  if(!configured()){
+    app.innerHTML = `
+      <div class="error-banner">
+        L'app n'est pas encore connectee a ton Google Sheet.<br><br>
+        Ouvre le fichier <b>index.html</b>, remplace la ligne<br>
+        <code>const APPS_SCRIPT_URL = "COLLE_TON_URL_APPS_SCRIPT_ICI"</code><br>
+        par l'URL de ton app web Google Apps Script (voir le guide).
+      </div>`;
+    return;
+  }
+
+  if(state.view === "home") return renderHome();
+  if(state.view === "category-list") return renderCategoryList();
+  if(state.view === "product") return renderProduct();
+  if(state.view === "newProduct") return renderNewProduct();
+}
+
+function renderHome(){
+  app.innerHTML = `
+    <h2 class="title">Choisis une categorie</h2>
+    <div class="grid">
+      ${CATEGORIES.map(c => `<div class="card" data-cat="${c.id}">${c.label}</div>`).join("")}
+    </div>`;
+  app.querySelectorAll("[data-cat]").forEach(el => {
+    el.addEventListener("click", () => go("category-list", { category: el.dataset.cat }));
+  });
+}
+
+function renderCategoryList(){
+  const cat = state.category;
+  const items = state.products.filter(p => p.categorie === cat);
+  app.innerHTML = `
+    <h2 class="title">${catLabel(cat)}</h2>
+    <button class="btn btn-add" id="addProductBtn">+ Nouveau produit</button>
+    <div class="search-wrap">
+      <input type="text" id="searchBox" placeholder="Rechercher un produit...">
+    </div>
+    <div id="productList">
+      ${items.length ? items.map(renderListItem).join("") : `<div class="empty">Aucun produit dans cette categorie pour l'instant.<br>Ajoute-en un !</div>`}
+    </div>`;
+
+  document.getElementById("addProductBtn").addEventListener("click", () => go("newProduct"));
+
+  function renderListItem(p){
+    return `<div class="list-item" data-product="${encodeURIComponent(p.nom)}">
+      <div>
+        <div class="name">${p.nom}</div>
+        <div class="meta">${p.tailles.length} taille(s)${p.prix ? " · " + p.prix + " €" : ""}</div>
+      </div>
+      <div style="color:var(--muted);">&rarr;</div>
+    </div>`;
+  }
+
+  function bindItems(list){
+    document.querySelectorAll("[data-product]").forEach(el => {
+      el.addEventListener("click", () => {
+        const nom = decodeURIComponent(el.dataset.product);
+        const product = state.products.find(p => p.nom === nom && p.categorie === cat);
+        go("product", { product });
+      });
+    });
+  }
+  bindItems(items);
+
+  document.getElementById("searchBox").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    const filtered = items.filter(p => p.nom.toLowerCase().includes(q));
+    document.getElementById("productList").innerHTML = filtered.length
+      ? filtered.map(renderListItem).join("")
+      : `<div class="empty">Aucun resultat.</div>`;
+    bindItems(filtered);
+  });
+}
+
+function renderProduct(){
+  const p = state.product;
+  const sizes = p.tailles && p.tailles.length ? p.tailles : catSizes(p.categorie);
+
+  app.innerHTML = `
+    <h2 class="title">${p.nom}</h2>
+    <label>Prix (€)</label>
+    <input type="number" id="priceInput" value="${p.prix || ""}" step="0.01" min="0">
+    <div id="sizeRows">
+      ${sizes.map(s => renderSizeRow(s)).join("")}
+    </div>
+    <button class="btn btn-primary" id="saveBtn">Enregistrer l'inventaire</button>
+  `;
+
+  function renderSizeRow(size){
+    const current = state.inventory[invKey(p.nom, size)];
+    const qty = current ? current.quantite : 0;
+    return `<div class="size-row" data-size="${encodeURIComponent(size)}">
+      <div class="size-label">${size}</div>
+      <div class="stepper">
+        <button type="button" data-action="dec">-</button>
+        <input type="number" class="qtyInput" value="${qty}" min="0" inputmode="numeric">
+        <button type="button" data-action="inc">+</button>
+      </div>
+    </div>`;
+  }
+
+  document.querySelectorAll(".size-row").forEach(row => {
+    const input = row.querySelector(".qtyInput");
+    row.querySelector('[data-action="dec"]').addEventListener("click", () => {
+      input.value = Math.max(0, (parseInt(input.value || "0", 10) - 1));
+    });
+    row.querySelector('[data-action="inc"]').addEventListener("click", () => {
+      input.value = parseInt(input.value || "0", 10) + 1;
+    });
+  });
+
+  document.getElementById("saveBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("saveBtn");
+    btn.disabled = true; btn.textContent = "Enregistrement...";
+    const prix = document.getElementById("priceInput").value;
+    const items = [];
+    document.querySelectorAll(".size-row").forEach(row => {
+      const size = decodeURIComponent(row.dataset.size);
+      const qty = parseInt(row.querySelector(".qtyInput").value || "0", 10);
+      items.push({ produit: p.nom, categorie: p.categorie, taille: size, quantite: qty, prix });
+    });
+    try{
+      await apiPost({ action: "updateInventoryBatch", items });
+      items.forEach(it => { state.inventory[invKey(it.produit, it.taille)] = it; });
+      p.prix = prix;
+      showToast("Inventaire enregistre sur le sheet ✓");
+    } catch(err){
+      showToast("Erreur : impossible d'enregistrer");
+    }
+    btn.disabled = false; btn.textContent = "Enregistrer l'inventaire";
+  });
+}
+
+function renderNewProduct(){
+  const presetCat = state.category || "";
+  app.innerHTML = `
+    <h2 class="title">Nouveau produit</h2>
+    <label>Nom du produit</label>
+    <input type="text" id="npName" placeholder="Ex: Hoodie Classic Noir">
+    <label>Categorie</label>
+    <select id="npCategory">
+      ${CATEGORIES.map(c => `<option value="${c.id}" ${c.id===presetCat?"selected":""}>${c.label}</option>`).join("")}
+    </select>
+    <label>Tailles (clique pour activer/desactiver, ou ajoute une taille custom)</label>
+    <div class="chips" id="npChips"></div>
+    <div style="display:flex; gap:8px;">
+      <input type="text" id="npCustomSize" placeholder="Ajouter une taille..." style="flex:1;">
+      <button type="button" class="btn btn-outline" id="npAddSize" style="width:auto; padding:12px 16px;">Ajouter</button>
+    </div>
+    <label style="margin-top:4px;">Prix (€)</label>
+    <input type="number" id="npPrice" step="0.01" min="0" placeholder="0.00">
+    <button class="btn btn-primary" id="npSave">Creer le produit</button>
+  `;
+
+  let selectedSizes = new Set(catSizes(presetCat));
+  const categorySelect = document.getElementById("npCategory");
+  const chipsEl = document.getElementById("npChips");
+
+  function renderChips(){
+    const defaults = catSizes(categorySelect.value);
+    const all = Array.from(new Set([...defaults, ...selectedSizes]));
+    chipsEl.innerHTML = all.map(s =>
+      `<div class="chip ${selectedSizes.has(s) ? "active" : ""}" data-size="${encodeURIComponent(s)}">${s}</div>`
+    ).join("");
+    chipsEl.querySelectorAll(".chip").forEach(chip => {
+      chip.addEventListener("click", () => {
+        const s = decodeURIComponent(chip.dataset.size);
+        if(selectedSizes.has(s)) selectedSizes.delete(s); else selectedSizes.add(s);
+        renderChips();
+      });
+    });
+  }
+  renderChips();
+
+  categorySelect.addEventListener("change", () => {
+    selectedSizes = new Set(catSizes(categorySelect.value));
+    renderChips();
+  });
+
+  document.getElementById("npAddSize").addEventListener("click", () => {
+    const input = document.getElementById("npCustomSize");
+    const val = input.value.trim();
+    if(val){ selectedSizes.add(val); input.value = ""; renderChips(); }
+  });
+
+  document.getElementById("npSave").addEventListener("click", async () => {
+    const nom = document.getElementById("npName").value.trim();
+    const categorie = categorySelect.value;
+    const prix = document.getElementById("npPrice").value;
+    const tailles = Array.from(selectedSizes);
+    if(!nom){ showToast("Donne un nom au produit"); return; }
+    if(!tailles.length){ showToast("Choisis au moins une taille"); return; }
+
+    const btn = document.getElementById("npSave");
+    btn.disabled = true; btn.textContent = "Creation...";
+    try{
+      await apiPost({ action: "addProduct", nom, categorie, tailles, prix });
+      const product = { nom, categorie, tailles, prix };
+      state.products.push(product);
+      showToast("Produit cree ✓");
+      go("product", { product, category: categorie });
+    } catch(err){
+      showToast("Erreur : impossible de creer le produit");
+      btn.disabled = false; btn.textContent = "Creer le produit";
+    }
+  });
+}
+
+/* ======= DEMARRAGE ======= */
+async function start(){
+  if(!configured()){ render(); return; }
+  app.innerHTML = `<div class="empty">Chargement...</div>`;
+  try{
+    await loadAll();
+    render();
+  } catch(err){
+    app.innerHTML = `<div class="error-banner">Impossible de charger les donnees depuis le Sheet. Verifie que l'URL Apps Script est correcte et que le deploiement est bien accessible a "Tout le monde".</div>`;
+  }
+}
+start();
+
+if("serviceWorker" in navigator){
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
