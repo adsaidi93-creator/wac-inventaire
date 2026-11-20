@@ -120,6 +120,7 @@
   <label for="sessionDate">Date de cet inventaire</label>
   <input type="date" id="sessionDate">
 </div>
+<div id="pendingBadge" style="text-align:center; font-size:11px; color:var(--muted); padding:4px 0; background:var(--bg);"></div>
 
 <main id="app"></main>
 
@@ -179,6 +180,52 @@ async function loadAll(){
   inventory.forEach(row => { state.inventory[invKey(row.produit, row.taille)] = row; });
 }
 
+/* ======= SAUVEGARDE LOCALE (brouillons + file d'attente hors-ligne) ======= */
+function draftKey(nom){ return "wac_draft_" + nom; }
+function saveDraft(nom, draft){
+  try{ localStorage.setItem(draftKey(nom), JSON.stringify(draft)); } catch(e){}
+}
+function loadDraft(nom){
+  try{
+    const raw = localStorage.getItem(draftKey(nom));
+    return raw ? JSON.parse(raw) : null;
+  } catch(e){ return null; }
+}
+function clearDraft(nom){
+  try{ localStorage.removeItem(draftKey(nom)); } catch(e){}
+}
+
+function getQueue(){
+  try{ return JSON.parse(localStorage.getItem("wac_pending_queue") || "[]"); } catch(e){ return []; }
+}
+function setQueue(q){
+  try{ localStorage.setItem("wac_pending_queue", JSON.stringify(q)); } catch(e){}
+  updatePendingBadge();
+}
+function queueCount(){
+  return getQueue().reduce((n, batch) => n + batch.items.length, 0);
+}
+function updatePendingBadge(){
+  const n = queueCount();
+  const badge = document.getElementById("pendingBadge");
+  if(badge) badge.textContent = n > 0 ? `⏳ ${n} en attente de synchro` : "";
+}
+async function flushQueue(){
+  const queue = getQueue();
+  if(!queue.length) return;
+  const remaining = [];
+  for(const batch of queue){
+    try{
+      await apiPost({ action: "updateInventoryBatch", items: batch.items });
+    } catch(err){
+      remaining.push(batch);
+    }
+  }
+  setQueue(remaining);
+  if(remaining.length < queue.length) showToast("Synchronisation terminee ✓");
+}
+window.addEventListener("online", flushQueue);
+
 /* ======= ROUTER / RENDER ======= */
 const app = document.getElementById("app");
 const backBtn = document.getElementById("backBtn");
@@ -237,20 +284,33 @@ function renderHome(){
 
 function renderCategoryList(){
   const cat = state.category;
-  const items = state.products.filter(p => p.categorie === cat);
+  const all = state.products.filter(p => p.categorie === cat);
+  const visibleItems = all.filter(p => !p.masque);
+  const hiddenItems = all.filter(p => p.masque);
+  let showHidden = false;
+
   app.innerHTML = `
     <h2 class="title">${catLabel(cat)}</h2>
     <button class="btn btn-add" id="addProductBtn">+ Nouveau produit</button>
     <div class="search-wrap">
       <input type="text" id="searchBox" placeholder="Rechercher un produit...">
     </div>
-    <div id="productList">
-      ${items.length ? items.map(renderListItem).join("") : `<div class="empty">Aucun produit dans cette categorie pour l'instant.<br>Ajoute-en un !</div>`}
-    </div>`;
+    <div id="productList"></div>
+    ${hiddenItems.length ? `<button class="btn btn-outline" id="toggleHiddenBtn" style="margin-top:6px;">Afficher les produits masques (${hiddenItems.length})</button>` : ""}
+  `;
 
   document.getElementById("addProductBtn").addEventListener("click", () => go("newProduct"));
 
   function renderListItem(p){
+    if(p.masque){
+      return `<div class="list-item">
+        <div>
+          <div class="name">${p.nom}</div>
+          <div class="meta">${p.tailles.length} taille(s)${p.prix ? " · " + p.prix + " DH" : ""} · masque</div>
+        </div>
+        <button type="button" class="btn btn-outline" data-unhide="${encodeURIComponent(p.nom)}" style="width:auto; padding:8px 12px;">Reafficher</button>
+      </div>`;
+    }
     return `<div class="list-item" data-product="${encodeURIComponent(p.nom)}">
       <div>
         <div class="name">${p.nom}</div>
@@ -260,7 +320,14 @@ function renderCategoryList(){
     </div>`;
   }
 
-  function bindItems(list){
+  function renderList(list){
+    document.getElementById("productList").innerHTML = list.length
+      ? list.map(renderListItem).join("")
+      : `<div class="empty">${showHidden ? "Aucun produit masque." : "Aucun produit dans cette categorie pour l'instant.<br>Ajoute-en un !"}</div>`;
+    bindItems();
+  }
+
+  function bindItems(){
     document.querySelectorAll("[data-product]").forEach(el => {
       el.addEventListener("click", () => {
         const nom = decodeURIComponent(el.dataset.product);
@@ -268,36 +335,63 @@ function renderCategoryList(){
         go("product", { product });
       });
     });
+    document.querySelectorAll("[data-unhide]").forEach(el => {
+      el.addEventListener("click", async () => {
+        const nom = decodeURIComponent(el.dataset.unhide);
+        const product = state.products.find(p => p.nom === nom && p.categorie === cat);
+        try{
+          await apiPost({ action: "setProductHidden", nom, hidden: false });
+          product.masque = false;
+          showToast("Produit reaffiche ✓");
+          render();
+        } catch(err){
+          showToast("Erreur : impossible de reafficher");
+        }
+      });
+    });
   }
-  bindItems(items);
+
+  renderList(visibleItems);
+
+  const toggleBtn = document.getElementById("toggleHiddenBtn");
+  if(toggleBtn){
+    toggleBtn.addEventListener("click", () => {
+      showHidden = !showHidden;
+      toggleBtn.textContent = showHidden
+        ? "Cacher les produits masques"
+        : `Afficher les produits masques (${hiddenItems.length})`;
+      renderList(showHidden ? hiddenItems : visibleItems);
+    });
+  }
 
   document.getElementById("searchBox").addEventListener("input", (e) => {
     const q = e.target.value.trim().toLowerCase();
-    const filtered = items.filter(p => p.nom.toLowerCase().includes(q));
-    document.getElementById("productList").innerHTML = filtered.length
-      ? filtered.map(renderListItem).join("")
-      : `<div class="empty">Aucun resultat.</div>`;
-    bindItems(filtered);
+    const source = showHidden ? hiddenItems : visibleItems;
+    renderList(source.filter(p => p.nom.toLowerCase().includes(q)));
   });
 }
 
 function renderProduct(){
   const p = state.product;
   const sizes = p.tailles && p.tailles.length ? p.tailles : catSizes(p.categorie);
+  const draft = loadDraft(p.nom);
 
   app.innerHTML = `
     <h2 class="title">${p.nom}</h2>
+    ${draft ? `<div class="error-banner" style="border-color:var(--green); color:#bdf5cf;">Brouillon non envoye restaure (comptage non termine la derniere fois).</div>` : ""}
     <label>Prix (DH)</label>
-    <input type="number" id="priceInput" value="${p.prix || ""}" step="0.01" min="0">
+    <input type="number" id="priceInput" value="${draft ? draft.prix : (p.prix || "")}" step="0.01" min="0">
     <div id="sizeRows">
       ${sizes.map(s => renderSizeRow(s)).join("")}
     </div>
     <button class="btn btn-primary" id="saveBtn">Enregistrer l'inventaire</button>
+    <button class="btn btn-outline" id="hideBtn" style="margin-top:10px;">${p.masque ? "Reafficher ce produit" : "Masquer ce produit (sold out)"}</button>
   `;
 
   function renderSizeRow(size){
     const current = state.inventory[invKey(p.nom, size)];
-    const qty = current ? current.quantite : 0;
+    const serverQty = current ? current.quantite : 0;
+    const qty = (draft && draft.sizes && draft.sizes[size] !== undefined) ? draft.sizes[size] : serverQty;
     const lastDate = current && current.date ? current.date.slice(0, 10) : null;
     return `<div class="size-row" data-size="${encodeURIComponent(size)}">
       <div>
@@ -312,14 +406,40 @@ function renderProduct(){
     </div>`;
   }
 
+  function persistDraft(){
+    const prix = document.getElementById("priceInput").value;
+    const sizesMap = {};
+    document.querySelectorAll(".size-row").forEach(row => {
+      const size = decodeURIComponent(row.dataset.size);
+      sizesMap[size] = parseInt(row.querySelector(".qtyInput").value || "0", 10);
+    });
+    saveDraft(p.nom, { prix, sizes: sizesMap });
+  }
+
   document.querySelectorAll(".size-row").forEach(row => {
     const input = row.querySelector(".qtyInput");
     row.querySelector('[data-action="dec"]').addEventListener("click", () => {
       input.value = Math.max(0, (parseInt(input.value || "0", 10) - 1));
+      persistDraft();
     });
     row.querySelector('[data-action="inc"]').addEventListener("click", () => {
       input.value = parseInt(input.value || "0", 10) + 1;
+      persistDraft();
     });
+    input.addEventListener("input", persistDraft);
+  });
+  document.getElementById("priceInput").addEventListener("input", persistDraft);
+
+  document.getElementById("hideBtn").addEventListener("click", async () => {
+    const hidden = !p.masque;
+    try{
+      await apiPost({ action: "setProductHidden", nom: p.nom, hidden });
+      p.masque = hidden;
+      showToast(hidden ? "Produit masque ✓" : "Produit reaffiche ✓");
+      go("category-list", { product: null });
+    } catch(err){
+      showToast("Erreur : impossible de modifier ce produit");
+    }
   });
 
   document.getElementById("saveBtn").addEventListener("click", async () => {
@@ -333,13 +453,22 @@ function renderProduct(){
       const qty = parseInt(row.querySelector(".qtyInput").value || "0", 10);
       items.push({ produit: p.nom, categorie: p.categorie, taille: size, quantite: qty, prix, date });
     });
+    await flushQueue();
     try{
       await apiPost({ action: "updateInventoryBatch", items });
       items.forEach(it => { state.inventory[invKey(it.produit, it.taille)] = it; });
       p.prix = prix;
+      clearDraft(p.nom);
       showToast("Inventaire enregistre sur le sheet ✓");
     } catch(err){
-      showToast("Erreur : impossible d'enregistrer");
+      // Hors-ligne ou serveur injoignable : on garde les donnees localement, rien n'est perdu.
+      const queue = getQueue();
+      queue.push({ items });
+      setQueue(queue);
+      items.forEach(it => { state.inventory[invKey(it.produit, it.taille)] = it; });
+      p.prix = prix;
+      clearDraft(p.nom);
+      showToast("Hors ligne : sera synchronise automatiquement ✓");
     }
     btn.disabled = false; btn.textContent = "Enregistrer l'inventaire";
   });
@@ -429,13 +558,15 @@ function todayStr(){
 
 async function start(){
   document.getElementById("sessionDate").value = todayStr();
+  updatePendingBadge();
   if(!configured()){ render(); return; }
   app.innerHTML = `<div class="empty">Chargement...</div>`;
   try{
     await loadAll();
     render();
+    flushQueue();
   } catch(err){
-    app.innerHTML = `<div class="error-banner">Impossible de charger les donnees depuis le Sheet. Verifie que l'URL Apps Script est correcte et que le deploiement est bien accessible a "Tout le monde".</div>`;
+    app.innerHTML = `<div class="error-banner">Impossible de charger les donnees depuis le Sheet. Verifie que l'URL Apps Script est correcte et que le deploiement est bien accessible a "Tout le monde".<br><br>Tes comptages non envoyes restent sauvegardes sur ce telephone et seront synchronises des que la connexion reviendra.</div>`;
   }
 }
 start();
