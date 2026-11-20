@@ -325,16 +325,70 @@ function render(){
   if(state.view === "category-list") return renderCategoryList();
   if(state.view === "product") return renderProduct();
   if(state.view === "newProduct") return renderNewProduct();
+  if(state.view === "dashboard") return renderDashboard();
 }
 
 function renderHome(){
   app.innerHTML = `
+    <button class="btn btn-outline" id="dashboardBtn" style="margin-bottom:14px;">📊 Tableau de bord</button>
     <h2 class="title">Choisis une categorie</h2>
     <div class="grid">
       ${CATEGORIES.map(c => `<div class="card" data-cat="${c.id}">${c.label}</div>`).join("")}
     </div>`;
+  document.getElementById("dashboardBtn").addEventListener("click", () => go("dashboard"));
   app.querySelectorAll("[data-cat]").forEach(el => {
     el.addEventListener("click", () => go("category-list", { category: el.dataset.cat }));
+  });
+}
+
+function renderDashboard(){
+  const site = state.site;
+  app.innerHTML = `<h2 class="title">Tableau de bord · ${site}</h2><div class="empty">Chargement...</div>`;
+
+  apiGet("dashboard", { site }).then(d => {
+    if(state.view !== "dashboard") return; // l'utilisateur a navigue ailleurs entre temps
+
+    const movementsHtml = d.topMouvements.length
+      ? d.topMouvements.map(m => {
+          const vendu = m.mouvement > 0;
+          const color = vendu ? "var(--green)" : "var(--red)";
+          return `<div class="list-item">
+            <div>
+              <div class="name">${m.produit} · ${m.taille}</div>
+              <div class="meta">${m.statut} · stock actuel ${m.quantite}</div>
+            </div>
+            <div style="color:${color}; font-weight:800;">${vendu ? "-" : "+"}${Math.abs(m.mouvement)}</div>
+          </div>`;
+        }).join("")
+      : `<div class="empty">Pas encore assez de comptages pour calculer un mouvement.</div>`;
+
+    const lowStockHtml = d.stockBas.length
+      ? d.stockBas.map(r => `<div class="list-item">
+          <div>
+            <div class="name">${r.produit} · ${r.taille}</div>
+            <div class="meta">${catLabel(r.categorie)}</div>
+          </div>
+          <div style="color:var(--red); font-weight:800;">${r.quantite}</div>
+        </div>`).join("")
+      : `<div class="empty">Aucun produit sous le seuil de ${d.seuilStockBas} unites.</div>`;
+
+    app.innerHTML = `
+      <h2 class="title">Tableau de bord · ${site}</h2>
+
+      <div class="list-item" style="margin-bottom:18px;">
+        <div class="name">Valeur totale du stock</div>
+        <div style="font-size:20px; font-weight:800; color:var(--red);">${d.valeurTotaleStock.toLocaleString("fr-FR")} DH</div>
+      </div>
+
+      <h2 class="title">Top mouvements (depuis le dernier comptage)</h2>
+      ${movementsHtml}
+
+      <h2 class="title" style="margin-top:18px;">⚠️ Stock bas (≤ ${d.seuilStockBas})</h2>
+      ${lowStockHtml}
+    `;
+  }).catch(() => {
+    if(state.view !== "dashboard") return;
+    app.innerHTML = `<h2 class="title">Tableau de bord · ${site}</h2><div class="error-banner">Impossible de charger le tableau de bord. Verifie ta connexion et reessaie.</div>`;
   });
 }
 
