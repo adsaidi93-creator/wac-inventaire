@@ -93,8 +93,19 @@
     background:#3a1414; border:1px solid var(--red); color:#ffb3b3; padding:12px; border-radius:12px;
     margin-bottom:14px; font-size:14px;
   }
-  .search-wrap{position:sticky; top:62px; background:var(--bg); padding-bottom:8px; z-index:5;}
+  .search-wrap{position:sticky; top:112px; background:var(--bg); padding-bottom:8px; z-index:5;}
   .empty{color:var(--muted); text-align:center; padding:40px 0;}
+  .date-bar{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px 16px; background:var(--panel2); border-bottom:1px solid var(--border);
+    position:sticky; top:63px; z-index:9;
+  }
+  .date-bar label{margin:0; font-size:13px; color:var(--muted); white-space:nowrap;}
+  .date-bar input[type=date]{
+    background:var(--panel); border:1px solid var(--border); color:var(--text);
+    padding:8px 10px; border-radius:10px; font-size:14px; margin:0; width:auto;
+  }
+  .size-row .last-count{font-size:11px; color:var(--muted); margin-top:2px;}
 </style>
 </head>
 <body>
@@ -104,6 +115,11 @@
   <div class="brand"><img src="logo.png" alt="WAC"> <span style="color:var(--muted); font-weight:500; font-size:13px;">Inventaire</span></div>
   <div style="width:30px;"></div>
 </header>
+
+<div class="date-bar">
+  <label for="sessionDate">Date de cet inventaire</label>
+  <input type="date" id="sessionDate">
+</div>
 
 <main id="app"></main>
 
@@ -282,8 +298,12 @@ function renderProduct(){
   function renderSizeRow(size){
     const current = state.inventory[invKey(p.nom, size)];
     const qty = current ? current.quantite : 0;
+    const lastDate = current && current.date ? current.date.slice(0, 10) : null;
     return `<div class="size-row" data-size="${encodeURIComponent(size)}">
-      <div class="size-label">${size}</div>
+      <div>
+        <div class="size-label">${size}</div>
+        ${lastDate ? `<div class="last-count">Dernier comptage : ${lastDate}</div>` : ""}
+      </div>
       <div class="stepper">
         <button type="button" data-action="dec">-</button>
         <input type="number" class="qtyInput" value="${qty}" min="0" inputmode="numeric">
@@ -306,11 +326,12 @@ function renderProduct(){
     const btn = document.getElementById("saveBtn");
     btn.disabled = true; btn.textContent = "Enregistrement...";
     const prix = document.getElementById("priceInput").value;
+    const date = document.getElementById("sessionDate").value;
     const items = [];
     document.querySelectorAll(".size-row").forEach(row => {
       const size = decodeURIComponent(row.dataset.size);
       const qty = parseInt(row.querySelector(".qtyInput").value || "0", 10);
-      items.push({ produit: p.nom, categorie: p.categorie, taille: size, quantite: qty, prix });
+      items.push({ produit: p.nom, categorie: p.categorie, taille: size, quantite: qty, prix, date });
     });
     try{
       await apiPost({ action: "updateInventoryBatch", items });
@@ -400,7 +421,14 @@ function renderNewProduct(){
 }
 
 /* ======= DEMARRAGE ======= */
+function todayStr(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
 async function start(){
+  document.getElementById("sessionDate").value = todayStr();
   if(!configured()){ render(); return; }
   app.innerHTML = `<div class="empty">Chargement...</div>`;
   try{
