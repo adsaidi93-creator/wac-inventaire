@@ -93,19 +93,17 @@
     background:#3a1414; border:1px solid var(--red); color:#ffb3b3; padding:12px; border-radius:12px;
     margin-bottom:14px; font-size:14px;
   }
-  .search-wrap{position:sticky; top:150px; background:var(--bg); padding-bottom:8px; z-index:5;}
+  .search-wrap{position:sticky; top:97px; background:var(--bg); padding-bottom:8px; z-index:5;}
   .empty{color:var(--muted); text-align:center; padding:40px 0;}
-  .session-bar{
-    display:flex; flex-wrap:wrap; gap:10px;
-    padding:10px 16px; background:var(--panel2); border-bottom:1px solid var(--border);
-    position:sticky; top:63px; z-index:9;
+  .session-pill{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:9px 16px; background:var(--panel2); border-bottom:1px solid var(--border);
+    position:sticky; top:63px; z-index:9; font-size:12px; color:var(--muted); cursor:pointer;
   }
-  .session-field{flex:1 1 100px; min-width:100px;}
-  .session-field label{margin:0 0 4px; font-size:11px; color:var(--muted); white-space:nowrap;}
-  .session-field input, .session-field select{
-    background:var(--panel); border:1px solid var(--border); color:var(--text);
-    padding:8px 10px; border-radius:10px; font-size:13px; margin:0; width:100%;
-  }
+  .session-pill .session-pill-edit{color:var(--red); font-weight:700; white-space:nowrap;}
+  .login-screen{display:flex; flex-direction:column; padding-top:8vh;}
+  .login-screen .login-logo{width:96px; height:96px; object-fit:contain; margin:0 auto 10px; display:block;}
+  .login-screen .login-title{text-align:center; font-weight:800; letter-spacing:2px; font-size:20px; margin-bottom:28px;}
   .size-row .last-count{font-size:11px; color:var(--muted); margin-top:2px;}
 </style>
 </head>
@@ -117,19 +115,9 @@
   <div style="width:30px;"></div>
 </header>
 
-<div class="session-bar" id="sessionBar">
-  <div class="session-field">
-    <label for="sessionSite">Site</label>
-    <select id="sessionSite"></select>
-  </div>
-  <div class="session-field">
-    <label for="sessionCompteur">Compteur</label>
-    <select id="sessionCompteur"></select>
-  </div>
-  <div class="session-field">
-    <label for="sessionDate">Date</label>
-    <input type="date" id="sessionDate">
-  </div>
+<div class="session-pill hidden" id="sessionPill">
+  <span id="sessionPillText"></span>
+  <span class="session-pill-edit">Modifier</span>
 </div>
 <div id="pendingBadge" style="text-align:center; font-size:11px; color:var(--muted); padding:4px 0; background:var(--bg);"></div>
 
@@ -163,8 +151,8 @@ const CATEGORIES = [
 
 /* ======= ETAT ======= */
 let state = {
-  products: [], inventory: {}, view: "home", category: null, product: null,
-  config: { sites: [], compteurs: [] }, site: "", compteur: "",
+  products: [], inventory: {}, view: "session", category: null, product: null,
+  config: { sites: [], compteurs: [] }, site: "", compteur: "", date: "", initialized: false,
 };
 
 function catLabel(id){ const c = CATEGORIES.find(c=>c.id===id); return c ? c.label : id; }
@@ -199,14 +187,8 @@ async function loadInventory(){
   state.inventory = {};
   inventory.forEach(row => { state.inventory[invKey(row.produit, row.taille, row.site)] = row; });
 }
-async function loadAll(){
-  await loadConfig();
-  ensureSessionDefaults();
-  await Promise.all([loadProducts(), loadInventory()]);
-}
-
-/* ======= SITE / COMPTEUR / DATE (barre de session persistante) ======= */
-function ensureSessionDefaults(){
+/* ======= SITE / COMPTEUR / DATE (choisis sur l'ecran de connexion) ======= */
+function applySessionDefaults(){
   const sites = state.config.sites || [];
   const compteurs = state.config.compteurs || [];
   let savedSite = "";
@@ -216,25 +198,24 @@ function ensureSessionDefaults(){
 
   state.site = sites.includes(savedSite) ? savedSite : (sites[0] || "");
   state.compteur = compteurs.includes(savedCompteur) ? savedCompteur : (compteurs[0] || "");
-
-  const siteSelect = document.getElementById("sessionSite");
-  const compteurSelect = document.getElementById("sessionCompteur");
-  siteSelect.innerHTML = sites.map(s => `<option value="${s}">${s}</option>`).join("");
-  compteurSelect.innerHTML = compteurs.map(c => `<option value="${c}">${c}</option>`).join("");
-  siteSelect.value = state.site;
-  compteurSelect.value = state.compteur;
+  state.date = todayStr();
 }
 
-document.getElementById("sessionSite").addEventListener("change", async (e) => {
-  state.site = e.target.value;
-  try{ localStorage.setItem("wac_site", state.site); } catch(err){}
-  await loadProducts();
-  render();
-});
-document.getElementById("sessionCompteur").addEventListener("change", (e) => {
-  state.compteur = e.target.value;
-  try{ localStorage.setItem("wac_compteur", state.compteur); } catch(err){}
-});
+function formatDateFr(iso){
+  if(!iso || iso.indexOf("-") === -1) return iso || "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}`;
+}
+
+const sessionPill = document.getElementById("sessionPill");
+sessionPill.addEventListener("click", () => go("session"));
+function updateSessionPill(){
+  const show = configured() && state.view !== "session";
+  sessionPill.classList.toggle("hidden", !show);
+  if(show){
+    document.getElementById("sessionPillText").textContent = `${state.site} · ${state.compteur} · ${formatDateFr(state.date)}`;
+  }
+}
 
 /* ======= SAUVEGARDE LOCALE (brouillons + file d'attente hors-ligne) ======= */
 function draftKey(nom, site){ return "wac_draft_" + site + "||" + nom; }
@@ -308,7 +289,8 @@ function showToast(msg){
 }
 
 function render(){
-  backBtn.classList.toggle("hidden", state.view === "home");
+  backBtn.classList.toggle("hidden", state.view === "home" || (state.view === "session" && !state.initialized));
+  updateSessionPill();
 
   if(!configured()){
     app.innerHTML = `
@@ -321,11 +303,54 @@ function render(){
     return;
   }
 
+  if(state.view === "session") return renderSession();
   if(state.view === "home") return renderHome();
   if(state.view === "category-list") return renderCategoryList();
   if(state.view === "product") return renderProduct();
   if(state.view === "newProduct") return renderNewProduct();
   if(state.view === "dashboard") return renderDashboard();
+}
+
+function renderSession(){
+  const sites = state.config.sites || [];
+  const compteurs = state.config.compteurs || [];
+
+  app.innerHTML = `
+    <div class="login-screen">
+      <img src="logo.png" alt="WAC" class="login-logo">
+      <div class="login-title">WAC Inventaire</div>
+      <label for="loginSite">Site</label>
+      <select id="loginSite">${sites.map(s => `<option value="${s}">${s}</option>`).join("")}</select>
+      <label for="loginCompteur">Compteur</label>
+      <select id="loginCompteur">${compteurs.map(c => `<option value="${c}">${c}</option>`).join("")}</select>
+      <label for="loginDate">Date de l'inventaire</label>
+      <input type="date" id="loginDate">
+      <button class="btn btn-primary" id="loginContinue" style="margin-top:6px;">Continuer</button>
+      <div id="loginError"></div>
+    </div>`;
+
+  document.getElementById("loginSite").value = state.site;
+  document.getElementById("loginCompteur").value = state.compteur;
+  document.getElementById("loginDate").value = state.date || todayStr();
+
+  document.getElementById("loginContinue").addEventListener("click", async () => {
+    const btn = document.getElementById("loginContinue");
+    state.site = document.getElementById("loginSite").value;
+    state.compteur = document.getElementById("loginCompteur").value;
+    state.date = document.getElementById("loginDate").value || todayStr();
+    try{ localStorage.setItem("wac_site", state.site); } catch(e){}
+    try{ localStorage.setItem("wac_compteur", state.compteur); } catch(e){}
+
+    btn.disabled = true; btn.textContent = "Chargement...";
+    try{
+      await Promise.all([loadProducts(), loadInventory()]);
+      state.initialized = true;
+      go("home");
+    } catch(err){
+      document.getElementById("loginError").innerHTML = `<div class="error-banner">Impossible de charger les donnees. Verifie ta connexion et reessaie.</div>`;
+      btn.disabled = false; btn.textContent = "Continuer";
+    }
+  });
 }
 
 function renderHome(){
@@ -557,7 +582,7 @@ function renderProduct(){
     const btn = document.getElementById("saveBtn");
     btn.disabled = true; btn.textContent = "Enregistrement...";
     const prix = document.getElementById("priceInput").value;
-    const date = document.getElementById("sessionDate").value;
+    const date = state.date;
     const compteur = state.compteur;
     const items = [];
     document.querySelectorAll(".size-row").forEach(row => {
@@ -669,13 +694,13 @@ function todayStr(){
 }
 
 async function start(){
-  document.getElementById("sessionDate").value = todayStr();
   updatePendingBadge();
   if(!configured()){ render(); return; }
   app.innerHTML = `<div class="empty">Chargement...</div>`;
   try{
-    await loadAll();
-    render();
+    await loadConfig();
+    applySessionDefaults();
+    go("session");
     flushQueue();
   } catch(err){
     app.innerHTML = `<div class="error-banner">Impossible de charger les donnees depuis le Sheet. Verifie que l'URL Apps Script est correcte et que le deploiement est bien accessible a "Tout le monde".<br><br>Tes comptages non envoyes restent sauvegardes sur ce telephone et seront synchronises des que la connexion reviendra.</div>`;
