@@ -56,6 +56,9 @@
   }
   .list-item .name{font-weight:700;}
   .list-item .meta{color:var(--muted); font-size:13px; margin-top:2px;}
+  .badge{display:inline-block; font-size:11px; font-weight:800; padding:2px 7px; border-radius:20px; margin-left:6px; vertical-align:middle;}
+  .badge-done{background:var(--green); color:#fff;}
+  .badge-partial{background:#5a4a12; color:#f0c94f;}
   .btn{
     display:block; width:100%; text-align:center; padding:14px; border-radius:12px;
     border:none; font-weight:800; font-size:16px; cursor:pointer;
@@ -93,22 +96,18 @@
     background:#3a1414; border:1px solid var(--red); color:#ffb3b3; padding:12px; border-radius:12px;
     margin-bottom:14px; font-size:14px;
   }
-  .search-wrap{position:sticky; top:112px; background:var(--bg); padding-bottom:8px; z-index:5;}
+  .search-wrap{position:sticky; top:97px; background:var(--bg); padding-bottom:8px; z-index:5;}
   .empty{color:var(--muted); text-align:center; padding:40px 0;}
-  .date-bar{
+  .session-pill{
     display:flex; align-items:center; justify-content:space-between; gap:10px;
-    padding:10px 16px; background:var(--panel2); border-bottom:1px solid var(--border);
-    position:sticky; top:63px; z-index:9;
+    padding:9px 16px; background:var(--panel2); border-bottom:1px solid var(--border);
+    position:sticky; top:63px; z-index:9; font-size:12px; color:var(--muted); cursor:pointer;
   }
-  .date-bar label{margin:0; font-size:13px; color:var(--muted); white-space:nowrap;}
-  .date-bar input[type=date]{
-    background:var(--panel); border:1px solid var(--border); color:var(--text);
-    padding:8px 10px; border-radius:10px; font-size:14px; margin:0; width:auto;
-  }
+  .session-pill .session-pill-edit{color:var(--red); font-weight:700; white-space:nowrap;}
+  .login-screen{display:flex; flex-direction:column; padding-top:8vh;}
+  .login-screen .login-logo{width:96px; height:96px; object-fit:contain; margin:0 auto 10px; display:block;}
+  .login-screen .login-title{text-align:center; font-weight:800; letter-spacing:2px; font-size:20px; margin-bottom:28px;}
   .size-row .last-count{font-size:11px; color:var(--muted); margin-top:2px;}
-  .badge{display:inline-block; font-size:10px; font-weight:800; padding:2px 7px; border-radius:10px; vertical-align:middle;}
-  .badge-done{background:var(--green); color:#fff;}
-  .badge-partial{background:#caa23a; color:#1a1400;}
 </style>
 </head>
 <body>
@@ -119,9 +118,9 @@
   <div style="width:30px;"></div>
 </header>
 
-<div class="date-bar">
-  <label for="sessionDate">Date de cet inventaire</label>
-  <input type="date" id="sessionDate">
+<div class="session-pill hidden" id="sessionPill">
+  <span id="sessionPillText"></span>
+  <span class="session-pill-edit">Modifier</span>
 </div>
 <div id="pendingBadge" style="text-align:center; font-size:11px; color:var(--muted); padding:4px 0; background:var(--bg);"></div>
 
@@ -154,15 +153,31 @@ const CATEGORIES = [
 ];
 
 /* ======= ETAT ======= */
-let state = { products: [], inventory: {}, view: "home", category: null, product: null };
+let state = {
+  products: [], inventory: {}, view: "session", category: null, product: null,
+  config: { sites: [], compteurs: [] }, site: "", compteur: "", date: "", initialized: false,
+};
 
 function catLabel(id){ const c = CATEGORIES.find(c=>c.id===id); return c ? c.label : id; }
 function catSizes(id){ const c = CATEGORIES.find(c=>c.id===id); return c ? c.sizes : []; }
-function invKey(nom, taille){ return nom + "||" + taille; }
+function invKey(nom, taille, site){ return nom + "||" + taille + "||" + site; }
+function sizesForProduct(p){ return p.tailles && p.tailles.length ? p.tailles : catSizes(p.categorie); }
+
+/** Combien de tailles de ce produit ont deja ete comptees sur le site/date de la session en cours. */
+function countStatus(p){
+  const sizes = sizesForProduct(p);
+  let done = 0;
+  sizes.forEach(s => {
+    const row = state.inventory[invKey(p.nom, s, state.site)];
+    if(row && row.date && String(row.date).slice(0, 10) === state.date) done++;
+  });
+  return { done, total: sizes.length };
+}
 
 /* ======= API ======= */
-async function apiGet(action){
-  const res = await fetch(`${APPS_SCRIPT_URL}?action=${action}`);
+async function apiGet(action, params){
+  const qs = new URLSearchParams(Object.assign({ action }, params || {}));
+  const res = await fetch(`${APPS_SCRIPT_URL}?${qs.toString()}`);
   if(!res.ok) throw new Error("Reponse serveur invalide");
   return res.json();
 }
@@ -176,26 +191,61 @@ async function apiPost(payload){
   return res.json();
 }
 
-async function loadAll(){
-  const [products, inventory] = await Promise.all([apiGet("products"), apiGet("inventory")]);
-  state.products = products;
+async function loadConfig(){
+  state.config = await apiGet("config");
+}
+async function loadProducts(){
+  state.products = await apiGet("products", { site: state.site });
+}
+async function loadInventory(){
+  const inventory = await apiGet("inventory");
   state.inventory = {};
-  inventory.forEach(row => { state.inventory[invKey(row.produit, row.taille)] = row; });
+  inventory.forEach(row => { state.inventory[invKey(row.produit, row.taille, row.site)] = row; });
+}
+
+/* ======= SITE / COMPTEUR / DATE (choisis sur l'ecran de connexion) ======= */
+function applySessionDefaults(){
+  const sites = state.config.sites || [];
+  const compteurs = state.config.compteurs || [];
+  let savedSite = "";
+  let savedCompteur = "";
+  try{ savedSite = localStorage.getItem("wac_site") || ""; } catch(e){}
+  try{ savedCompteur = localStorage.getItem("wac_compteur") || ""; } catch(e){}
+
+  state.site = sites.includes(savedSite) ? savedSite : (sites[0] || "");
+  state.compteur = compteurs.includes(savedCompteur) ? savedCompteur : (compteurs[0] || "");
+  state.date = todayStr();
+}
+
+function formatDateFr(iso){
+  if(!iso || iso.indexOf("-") === -1) return iso || "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}`;
+}
+
+const sessionPill = document.getElementById("sessionPill");
+sessionPill.addEventListener("click", () => go("session"));
+function updateSessionPill(){
+  const show = configured() && state.view !== "session";
+  sessionPill.classList.toggle("hidden", !show);
+  if(show){
+    document.getElementById("sessionPillText").textContent = `${state.site} · ${state.compteur} · ${formatDateFr(state.date)}`;
+  }
 }
 
 /* ======= SAUVEGARDE LOCALE (brouillons + file d'attente hors-ligne) ======= */
-function draftKey(nom){ return "wac_draft_" + nom; }
-function saveDraft(nom, draft){
-  try{ localStorage.setItem(draftKey(nom), JSON.stringify(draft)); } catch(e){}
+function draftKey(nom, site){ return "wac_draft_" + site + "||" + nom; }
+function saveDraft(nom, site, draft){
+  try{ localStorage.setItem(draftKey(nom, site), JSON.stringify(draft)); } catch(e){}
 }
-function loadDraft(nom){
+function loadDraft(nom, site){
   try{
-    const raw = localStorage.getItem(draftKey(nom));
+    const raw = localStorage.getItem(draftKey(nom, site));
     return raw ? JSON.parse(raw) : null;
   } catch(e){ return null; }
 }
-function clearDraft(nom){
-  try{ localStorage.removeItem(draftKey(nom)); } catch(e){}
+function clearDraft(nom, site){
+  try{ localStorage.removeItem(draftKey(nom, site)); } catch(e){}
 }
 
 function getQueue(){
@@ -243,9 +293,6 @@ backBtn.addEventListener("click", () => {
   else if(state.view === "newProduct") go(state.category ? "category-list" : "home");
   else go("home", { category: null });
 });
-document.getElementById("sessionDate").addEventListener("change", () => {
-  if(state.view === "category-list") render();
-});
 
 function configured(){ return APPS_SCRIPT_URL && !APPS_SCRIPT_URL.includes("COLLE_TON_URL"); }
 
@@ -258,7 +305,8 @@ function showToast(msg){
 }
 
 function render(){
-  backBtn.classList.toggle("hidden", state.view === "home");
+  backBtn.classList.toggle("hidden", state.view === "home" || (state.view === "session" && !state.initialized));
+  updateSessionPill();
 
   if(!configured()){
     app.innerHTML = `
@@ -271,47 +319,132 @@ function render(){
     return;
   }
 
+  if(state.view === "session") return renderSession();
   if(state.view === "home") return renderHome();
   if(state.view === "category-list") return renderCategoryList();
   if(state.view === "product") return renderProduct();
   if(state.view === "newProduct") return renderNewProduct();
+  if(state.view === "dashboard") return renderDashboard();
+}
+
+function renderSession(){
+  const sites = state.config.sites || [];
+  const compteurs = state.config.compteurs || [];
+
+  app.innerHTML = `
+    <div class="login-screen">
+      <img src="logo.png" alt="WAC" class="login-logo">
+      <div class="login-title">WAC Inventaire</div>
+      <label for="loginSite">Site</label>
+      <select id="loginSite">${sites.map(s => `<option value="${s}">${s}</option>`).join("")}</select>
+      <label for="loginCompteur">Compteur</label>
+      <select id="loginCompteur">${compteurs.map(c => `<option value="${c}">${c}</option>`).join("")}</select>
+      <label for="loginDate">Date de l'inventaire</label>
+      <input type="date" id="loginDate">
+      <button class="btn btn-primary" id="loginContinue" style="margin-top:6px;">Continuer</button>
+      <div id="loginError"></div>
+    </div>`;
+
+  document.getElementById("loginSite").value = state.site;
+  document.getElementById("loginCompteur").value = state.compteur;
+  document.getElementById("loginDate").value = state.date || todayStr();
+
+  document.getElementById("loginContinue").addEventListener("click", async () => {
+    const btn = document.getElementById("loginContinue");
+    state.site = document.getElementById("loginSite").value;
+    state.compteur = document.getElementById("loginCompteur").value;
+    state.date = document.getElementById("loginDate").value || todayStr();
+    try{ localStorage.setItem("wac_site", state.site); } catch(e){}
+    try{ localStorage.setItem("wac_compteur", state.compteur); } catch(e){}
+
+    btn.disabled = true; btn.textContent = "Chargement...";
+    try{
+      await Promise.all([loadProducts(), loadInventory()]);
+      state.initialized = true;
+      go("home");
+    } catch(err){
+      document.getElementById("loginError").innerHTML = `<div class="error-banner">Impossible de charger les donnees. Verifie ta connexion et reessaie.</div>`;
+      btn.disabled = false; btn.textContent = "Continuer";
+    }
+  });
 }
 
 function renderHome(){
   app.innerHTML = `
+    <button class="btn btn-outline" id="dashboardBtn" style="margin-bottom:14px;">📊 Tableau de bord</button>
     <h2 class="title">Choisis une categorie</h2>
     <div class="grid">
       ${CATEGORIES.map(c => `<div class="card" data-cat="${c.id}">${c.label}</div>`).join("")}
     </div>`;
+  document.getElementById("dashboardBtn").addEventListener("click", () => go("dashboard"));
   app.querySelectorAll("[data-cat]").forEach(el => {
     el.addEventListener("click", () => go("category-list", { category: el.dataset.cat }));
   });
 }
 
+function renderDashboard(){
+  const site = state.site;
+  app.innerHTML = `<h2 class="title">Tableau de bord · ${site}</h2><div class="empty">Chargement...</div>`;
+
+  apiGet("dashboard", { site }).then(d => {
+    if(state.view !== "dashboard") return; // l'utilisateur a navigue ailleurs entre temps
+
+    const movementsHtml = d.topMouvements.length
+      ? d.topMouvements.map(m => {
+          const vendu = m.mouvement > 0;
+          const color = vendu ? "var(--green)" : "var(--red)";
+          return `<div class="list-item">
+            <div>
+              <div class="name">${m.produit} · ${m.taille}</div>
+              <div class="meta">${m.statut} · stock actuel ${m.quantite}</div>
+            </div>
+            <div style="color:${color}; font-weight:800;">${vendu ? "-" : "+"}${Math.abs(m.mouvement)}</div>
+          </div>`;
+        }).join("")
+      : `<div class="empty">Pas encore assez de comptages pour calculer un mouvement.</div>`;
+
+    const lowStockHtml = d.stockBas.length
+      ? d.stockBas.map(r => `<div class="list-item">
+          <div>
+            <div class="name">${r.produit} · ${r.taille}</div>
+            <div class="meta">${catLabel(r.categorie)}</div>
+          </div>
+          <div style="color:var(--red); font-weight:800;">${r.quantite}</div>
+        </div>`).join("")
+      : `<div class="empty">Aucun produit sous le seuil de ${d.seuilStockBas} unites.</div>`;
+
+    app.innerHTML = `
+      <h2 class="title">Tableau de bord · ${site}</h2>
+
+      <div class="list-item" style="margin-bottom:18px;">
+        <div class="name">Valeur totale du stock</div>
+        <div style="font-size:20px; font-weight:800; color:var(--red);">${d.valeurTotaleStock.toLocaleString("fr-FR")} DH</div>
+      </div>
+
+      <h2 class="title">Top mouvements (depuis le dernier comptage)</h2>
+      ${movementsHtml}
+
+      <h2 class="title" style="margin-top:18px;">⚠️ Stock bas (≤ ${d.seuilStockBas})</h2>
+      ${lowStockHtml}
+    `;
+  }).catch(() => {
+    if(state.view !== "dashboard") return;
+    app.innerHTML = `<h2 class="title">Tableau de bord · ${site}</h2><div class="error-banner">Impossible de charger le tableau de bord. Verifie ta connexion et reessaie.</div>`;
+  });
+}
+
 function renderCategoryList(){
   const cat = state.category;
-  const sessionDate = document.getElementById("sessionDate").value;
   const all = state.products.filter(p => p.categorie === cat);
   const visibleItems = all.filter(p => !p.masque);
   const hiddenItems = all.filter(p => p.masque);
   let showHidden = false;
 
-  function countedToday(p){
-    const sizes = p.tailles && p.tailles.length ? p.tailles : catSizes(p.categorie);
-    if(!sizes.length) return { done: 0, total: 0 };
-    let done = 0;
-    sizes.forEach(s => {
-      const inv = state.inventory[invKey(p.nom, s)];
-      if(inv && inv.date && inv.date.slice(0, 10) === sessionDate) done++;
-    });
-    return { done, total: sizes.length };
-  }
-
-  const doneCount = visibleItems.filter(p => { const c = countedToday(p); return c.total > 0 && c.done === c.total; }).length;
+  const doneCount = visibleItems.filter(p => { const c = countStatus(p); return c.total > 0 && c.done === c.total; }).length;
 
   app.innerHTML = `
     <h2 class="title">${catLabel(cat)}</h2>
-    ${visibleItems.length ? `<div style="color:var(--muted); font-size:13px; margin:-8px 0 14px;">${doneCount}/${visibleItems.length} comptes aujourd'hui</div>` : ""}
+    ${visibleItems.length ? `<div style="color:var(--muted); font-size:13px; margin:-8px 0 14px;">${doneCount}/${visibleItems.length} comptes le ${formatDateFr(state.date)}</div>` : ""}
     <button class="btn btn-add" id="addProductBtn">+ Nouveau produit</button>
     <div class="search-wrap">
       <input type="text" id="searchBox" placeholder="Rechercher un produit...">
@@ -327,12 +460,12 @@ function renderCategoryList(){
       return `<div class="list-item">
         <div>
           <div class="name">${p.nom}</div>
-          <div class="meta">${p.tailles.length} taille(s)${p.prix ? " · " + p.prix + " DH" : ""} · masque</div>
+          <div class="meta">${p.tailles.length} taille(s)${p.prix ? " · " + p.prix + " DH" : ""} · masque a ${state.site}</div>
         </div>
         <button type="button" class="btn btn-outline" data-unhide="${encodeURIComponent(p.nom)}" style="width:auto; padding:8px 12px;">Reafficher</button>
       </div>`;
     }
-    const { done, total } = countedToday(p);
+    const { done, total } = countStatus(p);
     let badge = "";
     if(total > 0 && done === total) badge = `<span class="badge badge-done">✓ Compte</span>`;
     else if(done > 0) badge = `<span class="badge badge-partial">${done}/${total}</span>`;
@@ -348,7 +481,7 @@ function renderCategoryList(){
   function renderList(list){
     document.getElementById("productList").innerHTML = list.length
       ? list.map(renderListItem).join("")
-      : `<div class="empty">${showHidden ? "Aucun produit masque." : "Aucun produit dans cette categorie pour l'instant.<br>Ajoute-en un !"}</div>`;
+      : `<div class="empty">${showHidden ? "Aucun produit masque sur ce site." : "Aucun produit dans cette categorie pour l'instant.<br>Ajoute-en un !"}</div>`;
     bindItems();
   }
 
@@ -365,7 +498,7 @@ function renderCategoryList(){
         const nom = decodeURIComponent(el.dataset.unhide);
         const product = state.products.find(p => p.nom === nom && p.categorie === cat);
         try{
-          await apiPost({ action: "setProductHidden", nom, hidden: false });
+          await apiPost({ action: "setProductHidden", nom, site: state.site, hidden: false });
           product.masque = false;
           showToast("Produit reaffiche ✓");
           render();
@@ -398,30 +531,32 @@ function renderCategoryList(){
 
 function renderProduct(){
   const p = state.product;
-  const sizes = p.tailles && p.tailles.length ? p.tailles : catSizes(p.categorie);
-  const draft = loadDraft(p.nom);
+  const site = state.site;
+  const sizes = sizesForProduct(p);
+  const draft = loadDraft(p.nom, site);
 
   app.innerHTML = `
-    <h2 class="title">${p.nom}</h2>
-    ${draft ? `<div class="error-banner" style="border-color:var(--green); color:#bdf5cf;">Brouillon non envoye restaure (comptage non termine la derniere fois).</div>` : ""}
+    <h2 class="title">${p.nom} <span style="color:var(--muted); font-weight:500; font-size:13px;">· ${site}</span></h2>
+    ${draft ? `<div class="error-banner" style="border-color:var(--green); color:#bdf5cf;">Brouillon non envoye restaure (comptage non termine la derniere fois sur ce site).</div>` : ""}
     <label>Prix (DH)</label>
     <input type="number" id="priceInput" value="${draft ? draft.prix : (p.prix || "")}" step="0.01" min="0">
     <div id="sizeRows">
       ${sizes.map(s => renderSizeRow(s)).join("")}
     </div>
     <button class="btn btn-primary" id="saveBtn">Enregistrer l'inventaire</button>
-    <button class="btn btn-outline" id="hideBtn" style="margin-top:10px;">${p.masque ? "Reafficher ce produit" : "Masquer ce produit (sold out)"}</button>
+    <button class="btn btn-outline" id="hideBtn" style="margin-top:10px;">${p.masque ? "Reafficher ce produit sur " + site : "Masquer ce produit sur " + site + " (sold out)"}</button>
   `;
 
   function renderSizeRow(size){
-    const current = state.inventory[invKey(p.nom, size)];
+    const current = state.inventory[invKey(p.nom, size, site)];
     const serverQty = current ? current.quantite : 0;
     const qty = (draft && draft.sizes && draft.sizes[size] !== undefined) ? draft.sizes[size] : serverQty;
     const lastDate = current && current.date ? current.date.slice(0, 10) : null;
+    const comptedToday = lastDate === state.date;
     return `<div class="size-row" data-size="${encodeURIComponent(size)}">
       <div>
-        <div class="size-label">${size}</div>
-        ${lastDate ? `<div class="last-count">Dernier comptage : ${lastDate}</div>` : ""}
+        <div class="size-label">${size} ${comptedToday ? `<span class="badge badge-done">✓</span>` : ""}</div>
+        ${lastDate ? `<div class="last-count">Dernier comptage (${site}) : ${lastDate}</div>` : ""}
       </div>
       <div class="stepper">
         <button type="button" data-action="dec">-</button>
@@ -438,7 +573,7 @@ function renderProduct(){
       const size = decodeURIComponent(row.dataset.size);
       sizesMap[size] = parseInt(row.querySelector(".qtyInput").value || "0", 10);
     });
-    saveDraft(p.nom, { prix, sizes: sizesMap });
+    saveDraft(p.nom, site, { prix, sizes: sizesMap });
   }
 
   document.querySelectorAll(".size-row").forEach(row => {
@@ -458,9 +593,9 @@ function renderProduct(){
   document.getElementById("hideBtn").addEventListener("click", async () => {
     const hidden = !p.masque;
     try{
-      await apiPost({ action: "setProductHidden", nom: p.nom, hidden });
+      await apiPost({ action: "setProductHidden", nom: p.nom, site, hidden });
       p.masque = hidden;
-      showToast(hidden ? "Produit masque ✓" : "Produit reaffiche ✓");
+      showToast(hidden ? "Produit masque sur " + site + " ✓" : "Produit reaffiche sur " + site + " ✓");
       go("category-list", { product: null });
     } catch(err){
       showToast("Erreur : impossible de modifier ce produit");
@@ -471,31 +606,33 @@ function renderProduct(){
     const btn = document.getElementById("saveBtn");
     btn.disabled = true; btn.textContent = "Enregistrement...";
     const prix = document.getElementById("priceInput").value;
-    const date = document.getElementById("sessionDate").value;
+    const date = state.date;
+    const compteur = state.compteur;
     const items = [];
     document.querySelectorAll(".size-row").forEach(row => {
       const size = decodeURIComponent(row.dataset.size);
       const qty = parseInt(row.querySelector(".qtyInput").value || "0", 10);
-      items.push({ produit: p.nom, categorie: p.categorie, taille: size, quantite: qty, prix, date });
+      items.push({ produit: p.nom, categorie: p.categorie, taille: size, quantite: qty, prix, date, site, compteur });
     });
     await flushQueue();
     try{
       await apiPost({ action: "updateInventoryBatch", items });
-      items.forEach(it => { state.inventory[invKey(it.produit, it.taille)] = it; });
+      items.forEach(it => { state.inventory[invKey(it.produit, it.taille, it.site)] = it; });
       p.prix = prix;
-      clearDraft(p.nom);
+      clearDraft(p.nom, site);
       showToast("Inventaire enregistre sur le sheet ✓");
+      render(); // rafraichit les badges "✓" de cette page (dernier comptage mis a jour)
     } catch(err){
       // Hors-ligne ou serveur injoignable : on garde les donnees localement, rien n'est perdu.
       const queue = getQueue();
       queue.push({ items });
       setQueue(queue);
-      items.forEach(it => { state.inventory[invKey(it.produit, it.taille)] = it; });
+      items.forEach(it => { state.inventory[invKey(it.produit, it.taille, it.site)] = it; });
       p.prix = prix;
-      clearDraft(p.nom);
+      clearDraft(p.nom, site);
       showToast("Hors ligne : sera synchronise automatiquement ✓");
+      render();
     }
-    btn.disabled = false; btn.textContent = "Enregistrer l'inventaire";
   });
 }
 
@@ -563,7 +700,7 @@ function renderNewProduct(){
     btn.disabled = true; btn.textContent = "Creation...";
     try{
       await apiPost({ action: "addProduct", nom, categorie, tailles, prix });
-      const product = { nom, categorie, tailles, prix };
+      const product = { nom, categorie, tailles, prix, masque: false };
       state.products.push(product);
       showToast("Produit cree ✓");
       go("product", { product, category: categorie });
@@ -582,13 +719,13 @@ function todayStr(){
 }
 
 async function start(){
-  document.getElementById("sessionDate").value = todayStr();
   updatePendingBadge();
   if(!configured()){ render(); return; }
   app.innerHTML = `<div class="empty">Chargement...</div>`;
   try{
-    await loadAll();
-    render();
+    await loadConfig();
+    applySessionDefaults();
+    go("session");
     flushQueue();
   } catch(err){
     app.innerHTML = `<div class="error-banner">Impossible de charger les donnees depuis le Sheet. Verifie que l'URL Apps Script est correcte et que le deploiement est bien accessible a "Tout le monde".<br><br>Tes comptages non envoyes restent sauvegardes sur ce telephone et seront synchronises des que la connexion reviendra.</div>`;
